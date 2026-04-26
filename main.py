@@ -14,7 +14,7 @@ from PIL import Image
 PHOTO_DIR = Path("photos")
 OUTPUT_FILE = Path("resultats_cartes_hockey.xlsx")
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 UNKNOWN_VALUE = "à vérifier"
 
 KNOWN_BRANDS = {
