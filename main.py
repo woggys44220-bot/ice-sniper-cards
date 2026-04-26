@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote_plus
 
+import cv2
+import pytesseract
 from openpyxl import Workbook
-
+from PIL import Image
 
 PHOTO_DIR = Path("photos")
 OUTPUT_FILE = Path("resultats_cartes_hockey.xlsx")
@@ -15,40 +17,79 @@ OUTPUT_FILE = Path("resultats_cartes_hockey.xlsx")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 KNOWN_BRANDS = {
-    "upperdeck": "Upper Deck",
-    "upper_deck": "Upper Deck",
+    "upper deck": "Upper Deck",
+    "o-pee-chee": "O-Pee-Chee",
     "opc": "O-Pee-Chee",
-    "opeechee": "O-Pee-Chee",
     "panini": "Panini",
     "fleer": "Fleer",
     "score": "Score",
     "parkhurst": "Parkhurst",
-    "itg": "In The Game",
-    "sp": "SP",
+    "in the game": "In The Game",
+    "sp authentic": "SP Authentic",
+    "spx": "SPx",
     "mvp": "MVP",
+    "ud": "Upper Deck",
+}
+
+KNOWN_SERIES = {
+    "young guns": "Young Guns",
+    "canvas": "Canvas",
+    "platinum": "Platinum",
+    "artifacts": "Artifacts",
+    "credentials": "Credentials",
+    "series one": "Series 1",
+    "series 1": "Series 1",
+    "series two": "Series 2",
+    "series 2": "Series 2",
+}
+
+KNOWN_INSERTS = {
+    "autograph": "Autograph",
+    "auto": "Autograph",
+    "jersey": "Jersey",
+    "patch": "Patch",
+    "parallel": "Parallel",
+    "rookie": "Rookie",
 }
 
 KNOWN_TEAMS = {
     "canadiens": "Montreal Canadiens",
-    "habs": "Montreal Canadiens",
+    "montreal": "Montreal Canadiens",
     "bruins": "Boston Bruins",
-    "mapleleafs": "Toronto Maple Leafs",
+    "boston": "Boston Bruins",
+    "maple leafs": "Toronto Maple Leafs",
     "leafs": "Toronto Maple Leafs",
+    "toronto": "Toronto Maple Leafs",
     "rangers": "New York Rangers",
+    "new york": "New York Rangers",
     "blackhawks": "Chicago Blackhawks",
+    "chicago": "Chicago Blackhawks",
     "oilers": "Edmonton Oilers",
+    "edmonton": "Edmonton Oilers",
     "canucks": "Vancouver Canucks",
+    "vancouver": "Vancouver Canucks",
     "flames": "Calgary Flames",
+    "calgary": "Calgary Flames",
     "avalanche": "Colorado Avalanche",
+    "colorado": "Colorado Avalanche",
     "kings": "Los Angeles Kings",
+    "los angeles": "Los Angeles Kings",
     "devils": "New Jersey Devils",
+    "new jersey": "New Jersey Devils",
     "flyers": "Philadelphia Flyers",
+    "philadelphia": "Philadelphia Flyers",
     "penguins": "Pittsburgh Penguins",
+    "pittsburgh": "Pittsburgh Penguins",
     "sabres": "Buffalo Sabres",
-    "redwings": "Detroit Red Wings",
+    "buffalo": "Buffalo Sabres",
+    "red wings": "Detroit Red Wings",
+    "detroit": "Detroit Red Wings",
     "senators": "Ottawa Senators",
+    "ottawa": "Ottawa Senators",
     "jets": "Winnipeg Jets",
+    "winnipeg": "Winnipeg Jets",
     "wild": "Minnesota Wild",
+    "minnesota": "Minnesota Wild",
 }
 
 
@@ -62,6 +103,7 @@ class CardResult:
     insert: str
     numero_carte: str
     equipe: str
+    texte_ocr: str
     requete_prix: str
     lien_ebay: str
     lien_130point: str
@@ -71,108 +113,82 @@ class CardResult:
     statut: str
 
 
-def normalize_token(token: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", token.lower())
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
 
 
-def tokenize_stem(stem: str) -> list[str]:
-    parts = re.split(r"[_\-\s]+", stem)
-    return [p for p in parts if p]
+def run_ocr(path: Path) -> str:
+    """Lit le texte réel de l'image via PIL + OpenCV + pytesseract."""
+    texts: list[str] = []
+
+    with Image.open(path) as img:
+        pil_text = pytesseract.image_to_string(img, lang="eng", config="--psm 6")
+        texts.append(pil_text)
+
+    cv_img = cv2.imread(str(path))
+    if cv_img is None:
+        return normalize_text(" ".join(texts))
+
+    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+    upscaled = cv2.resize(gray, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC)
+    denoised = cv2.GaussianBlur(upscaled, (3, 3), 0)
+
+    _, binary = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ocr_binary = pytesseract.image_to_string(binary, lang="eng", config="--psm 6")
+    texts.append(ocr_binary)
+
+    adaptive = cv2.adaptiveThreshold(
+        denoised,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        5,
+    )
+    ocr_adaptive = pytesseract.image_to_string(adaptive, lang="eng", config="--psm 11")
+    texts.append(ocr_adaptive)
+
+    return normalize_text(" ".join(texts))
 
 
-def find_year(tokens: list[str]) -> str:
-    for token in tokens:
-        if re.fullmatch(r"(19|20)\d{2}", token):
-            return token
-        if re.fullmatch(r"(19|20)\d{2}(19|20)\d{2}", token):
-            return f"{token[:4]}-{token[4:]}"
+def extract_year(ocr_text: str) -> str:
+    match = re.search(r"\b(19\d{2}|20[0-2]\d)\b", ocr_text)
+    return match.group(1) if match else "à vérifier"
+
+
+def extract_card_number(ocr_text: str) -> str:
+    patterns = [
+        r"(?:no\.?|#|num(?:ber)?\s*)([a-z]{0,3}\d{1,4})\b",
+        r"\b([A-Z]{1,3}-?\d{1,4})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, ocr_text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper().replace("-", "")
     return "à vérifier"
 
 
-def find_card_number(tokens: list[str]) -> str:
-    for token in tokens:
-        clean = token.replace("#", "")
-        if re.fullmatch(r"[A-Za-z]{0,3}\d{1,4}", clean):
-            if any(ch.isdigit() for ch in clean):
-                return clean.upper()
-    return "à vérifier"
-
-
-def find_brand(tokens: list[str]) -> str:
-    for token in tokens:
-        key = normalize_token(token)
-        if key in KNOWN_BRANDS:
-            return KNOWN_BRANDS[key]
-    return "à vérifier"
-
-
-def find_team(tokens: list[str]) -> str:
-    for token in tokens:
-        key = normalize_token(token)
-        if key in KNOWN_TEAMS:
-            return KNOWN_TEAMS[key]
-    return "à vérifier"
-
-
-def guess_player(tokens: list[str]) -> str:
-    if not tokens:
-        return "à vérifier"
-
-    stopwords = {
-        "front",
-        "back",
-        "recto",
-        "verso",
-        "scan",
-        "card",
-        "hockey",
-    }
-
-    player_parts: list[str] = []
-    for token in tokens:
-        clean = normalize_token(token)
-        if not clean or clean in stopwords:
-            continue
-        if re.fullmatch(r"(19|20)\d{2}", clean):
-            break
-        if clean in KNOWN_BRANDS or clean in KNOWN_TEAMS:
-            break
-        if re.fullmatch(r"[a-z]{0,3}\d{1,4}", clean):
-            break
-        player_parts.append(token.title())
-        if len(player_parts) >= 3:
-            break
-
-    return " ".join(player_parts) if player_parts else "à vérifier"
-
-
-def guess_series(tokens: list[str], marque: str) -> str:
-    if marque == "à vérifier":
-        return "à vérifier"
-
-    cleaned = [normalize_token(t) for t in tokens]
-    if "youngguns" in cleaned:
-        return "Young Guns"
-    if "rookie" in cleaned:
-        return "Rookie"
-    if "canvas" in cleaned:
-        return "Canvas"
-    return "à vérifier"
-
-
-def guess_insert(tokens: list[str]) -> str:
-    cleaned = {normalize_token(t) for t in tokens}
-    insert_map = {
-        "autograph": "Autograph",
-        "auto": "Autograph",
-        "jersey": "Jersey",
-        "patch": "Patch",
-        "parallel": "Parallel",
-        "rookie": "Rookie",
-    }
-    for key, value in insert_map.items():
-        if key in cleaned:
+def match_from_dict(ocr_text: str, mapping: dict[str, str]) -> str:
+    lowered = ocr_text.lower()
+    for key, value in mapping.items():
+        if key in lowered:
             return value
+    return "à vérifier"
+
+
+def extract_player(ocr_text: str) -> str:
+    lines = [ln.strip() for ln in re.split(r"[\n\r]+", ocr_text) if ln.strip()]
+    for line in lines:
+        if len(line.split()) == 2 and all(part.isalpha() for part in line.split()):
+            return line.title()
+
+    tokens = re.findall(r"[A-Za-z]{3,}", ocr_text)
+    for i in range(len(tokens) - 1):
+        first, last = tokens[i], tokens[i + 1]
+        if first.lower() in {"hockey", "card", "national", "league", "upper", "deck"}:
+            continue
+        return f"{first.title()} {last.title()}"
+
     return "à vérifier"
 
 
@@ -181,10 +197,20 @@ def build_price_query(
     annee: str,
     marque: str,
     serie: str,
+    insert: str,
     numero_carte: str,
     equipe: str,
 ) -> str:
-    elements = [joueur, annee, marque, serie, f"#{numero_carte}" if numero_carte != "à vérifier" else "", equipe, "hockey card"]
+    elements = [
+        joueur,
+        annee,
+        marque,
+        serie,
+        insert,
+        f"#{numero_carte}" if numero_carte != "à vérifier" else "",
+        equipe,
+        "hockey card",
+    ]
     clean = [e.strip() for e in elements if e and e != "à vérifier"]
     return " ".join(clean) if clean else "hockey card à vérifier"
 
@@ -197,18 +223,27 @@ def build_links(query: str) -> tuple[str, str]:
 
 
 def analyze_image(path: Path) -> CardResult:
-    tokens = tokenize_stem(path.stem)
+    try:
+        texte_ocr = run_ocr(path)
+    except pytesseract.TesseractNotFoundError:
+        texte_ocr = "Tesseract non trouvé. Installez Tesseract OCR et ajoutez-le au PATH Windows."
+    except Exception as exc:  # fallback simple pour éviter un crash global
+        texte_ocr = f"OCR erreur: {exc}"
 
-    joueur = guess_player(tokens)
-    annee = find_year(tokens)
-    marque = find_brand(tokens)
-    serie = guess_series(tokens, marque)
-    insert = guess_insert(tokens)
-    numero_carte = find_card_number(tokens)
-    equipe = find_team(tokens)
+    joueur = extract_player(texte_ocr)
+    annee = extract_year(texte_ocr)
+    marque = match_from_dict(texte_ocr, KNOWN_BRANDS)
+    serie = match_from_dict(texte_ocr, KNOWN_SERIES)
+    insert = match_from_dict(texte_ocr, KNOWN_INSERTS)
+    numero_carte = extract_card_number(texte_ocr)
+    equipe = match_from_dict(texte_ocr, KNOWN_TEAMS)
 
-    requete = build_price_query(joueur, annee, marque, serie, numero_carte, equipe)
+    requete = build_price_query(joueur, annee, marque, serie, insert, numero_carte, equipe)
     lien_ebay, lien_130point = build_links(requete)
+
+    champs = [joueur, annee, marque, serie, insert, numero_carte, equipe]
+    unresolved = sum(value == "à vérifier" for value in champs)
+    statut = "ok" if unresolved <= 2 else "OCR partiel (champs à vérifier)"
 
     return CardResult(
         fichier_photo=path.name,
@@ -219,13 +254,14 @@ def analyze_image(path: Path) -> CardResult:
         insert=insert,
         numero_carte=numero_carte,
         equipe=equipe,
+        texte_ocr=texte_ocr if texte_ocr else "à vérifier",
         requete_prix=requete,
         lien_ebay=lien_ebay,
         lien_130point=lien_130point,
         prix_bas="à vérifier",
         prix_moyen="à vérifier",
         prix_haut="à vérifier",
-        statut="analyse basique (prix à vérifier)",
+        statut=statut,
     )
 
 
@@ -256,7 +292,6 @@ def main() -> None:
     results = [analyze_image(image) for image in images]
 
     if not results:
-        # Ligne vide de démonstration pour aider l'utilisateur à voir la structure.
         results.append(
             CardResult(
                 fichier_photo="(aucune image détectée)",
@@ -267,6 +302,7 @@ def main() -> None:
                 insert="à vérifier",
                 numero_carte="à vérifier",
                 equipe="à vérifier",
+                texte_ocr="à vérifier",
                 requete_prix="hockey card à vérifier",
                 lien_ebay="https://www.ebay.com",
                 lien_130point="https://130point.com",

@@ -1,53 +1,39 @@
 # ice-sniper-cards
 
-Application Python (version simple) pour analyser des photos de cartes de hockey et générer un fichier Excel prêt pour la recherche de prix.
+Application Python pour analyser des photos de cartes de hockey, extraire le texte visible via OCR, puis générer un fichier Excel prêt pour la recherche de prix.
 
-## Objectif de cette V1 (sans API payante)
+## Objectif de la V2
 
-- Déposer des images dans `photos/`
-- Extraire des informations **basiques** depuis le nom de fichier (heuristiques)
+- Lire les photos dans `photos/`
+- Utiliser **PIL + OpenCV + pytesseract** pour lire le contenu réel de l'image
+- Remplir les colonnes : `joueur`, `annee`, `marque`, `serie`, `insert`, `numero_carte`, `equipe`
+- Ajouter `texte_ocr` pour audit du texte détecté
 - Générer une requête de prix propre
-- Générer des liens de recherche:
+- Générer des liens:
   - eBay sold listings
   - 130point
 - Créer `resultats_cartes_hockey.xlsx`
-- **Ne jamais inventer de prix**: les colonnes de prix restent à `à vérifier`
-
-## Fichiers générés
-
-- `main.py`
-- `requirements.txt`
-- `photos/` (à remplir par l'utilisateur)
-- `resultats_cartes_hockey.xlsx` (créé à l'exécution)
+- Ne jamais inventer les prix (`prix_bas`, `prix_moyen`, `prix_haut` restent `à vérifier`)
 
 ## Installation (Windows)
 
 ```powershell
-cd chemin\vers\ice-sniper-cards
-python -m venv .venv
-.\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 ## Utilisation
 
-1. Copiez vos photos dans le dossier `photos/`.
-2. Lancez le script:
-
 ```powershell
 python main.py
 ```
 
-3. Ouvrez le fichier `resultats_cartes_hockey.xlsx`.
+## Pré-requis OCR Windows
 
-## Format recommandé des noms de fichiers
+Le package Python `pytesseract` nécessite l'installation de **Tesseract OCR** sur Windows.
 
-La V1 lit le nom du fichier (pas encore d'OCR). Plus le nom est structuré, meilleurs seront les résultats.
-
-Exemples:
-
-- `Connor_McDavid_2015_UpperDeck_YoungGuns_YG201_Oilers_recto.jpg`
-- `Sidney_Crosby_2005_Panini_Rookie_RC87_Penguins_verso.png`
+1. Installer Tesseract OCR (application système)
+2. Ajouter son dossier d'installation au `PATH`
+3. Relancer le terminal
 
 ## Colonnes du fichier Excel
 
@@ -59,6 +45,7 @@ Exemples:
 - `insert`
 - `numero_carte`
 - `equipe`
+- `texte_ocr`
 - `requete_prix`
 - `lien_ebay`
 - `lien_130point`
@@ -67,23 +54,8 @@ Exemples:
 - `prix_haut`
 - `statut`
 
-## Limites de la V1
+## Règles importantes
 
-- Pas d'OCR ni de vision IA
-- Extraction basée sur des règles simples
-- Certaines cartes resteront en `à vérifier`
-
-## Feuille de route V2 (avancée)
-
-Pour une version avancée:
-
-1. Ajouter OCR local (`pytesseract` ou `easyocr`)
-2. Détection texte recto/verso et fusion des infos
-3. Normalisation intelligente (joueurs, équipes, marques)
-4. Option de scraping/API pour récupérer des prix réels (toujours sans inventer)
-5. Score de confiance par champ
-
-## Rappel important
-
-- Les prix ne sont **jamais** inventés.
-- Si un prix n'est pas trouvé automatiquement, garder `à vérifier`.
+- Le script lit d'abord le **texte de l'image** (pas seulement le nom du fichier).
+- Si l'OCR ne lit pas assez bien, les champs restent `à vérifier`.
+- Aucun prix n'est inventé.
